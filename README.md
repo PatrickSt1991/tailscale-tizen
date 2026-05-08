@@ -9,6 +9,10 @@ exit node, so other devices on the tailnet can route traffic through
 it. The TV's own apps continue to use the local network -- this app
 does **not** provide VPN coverage for the TV itself.
 
+## Tracking Issue
+
+See https://github.com/tailscale/tailscale/issues/10955
+
 ## How it works
 
 ```
