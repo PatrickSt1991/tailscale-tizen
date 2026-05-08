@@ -1,0 +1,19 @@
+# Cross-compiled binaries staged for packaging
+/tailscaled-arm
+/tailscale-cli-arm
+
+# Local environment overrides (cert passwords, etc.)
+.env.local
+
+# .NET build artifacts
+**/bin/
+**/obj/
+
+# Tailscale staged binaries (cross-compiled into lib/ at build time)
+/Tailscale/lib/tailscaled
+/Tailscale/lib/tailscale
+
+# Signed packages
+*.signed.tpk
+DotnetProbe.signed.tpk
+Tailscale.signed.tpk

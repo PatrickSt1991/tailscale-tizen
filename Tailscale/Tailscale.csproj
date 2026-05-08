@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net6.0-tizen8.0</TargetFramework>
+    <RootNamespace>Tailscale</RootNamespace>
+    <AssemblyName>Tailscale</AssemblyName>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="lib\tailscaled">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
+    <Content Include="lib\tailscale">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
+  </ItemGroup>
+
+</Project>
