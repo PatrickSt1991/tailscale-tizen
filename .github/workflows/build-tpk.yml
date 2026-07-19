@@ -23,13 +23,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # net6.0-tizen8.0 per Tailscale/Tailscale.csproj
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '6.0.x'
+      # The Makefile defaults to DOTNET ?= $HOME/.dotnet-local/dotnet, so install
+      # .NET 6 (net6.0-tizen8.0 per the csproj) exactly there.
+      - name: Install .NET 6 SDK to ~/.dotnet-local
+        run: |
+          curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh
+          bash dotnet-install.sh --channel 6.0 --install-dir "$HOME/.dotnet-local"
+          echo "$HOME/.dotnet-local" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$HOME/.dotnet-local" >> "$GITHUB_ENV"
 
       - name: Install Tizen .NET workload
-        run: curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh | sudo bash
+        run: curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh | bash
 
       - name: Build unsigned .tpk (make tailscaled + dotnet build)
         run: make build
