@@ -1,0 +1,31 @@
+name: Sync with upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'      # daily 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge upstream tailscale/tailscale-tizen into main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          before=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          # GitHub's native "Sync fork" â€” merges upstream default branch into ours.
+          gh api --method POST "repos/$REPO/merge-upstream" -f branch=main || true
+          after=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ "$before" != "$after" ]; then
+            echo "Upstream changes merged: $before -> $after"
+            # merge-upstream commits don't fire push triggers, so kick the build.
+            gh workflow run build-tpk.yml --ref main
+          else
+            echo "Already up to date with upstream."
+          fi
