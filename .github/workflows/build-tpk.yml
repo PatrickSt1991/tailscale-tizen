@@ -1,0 +1,57 @@
+name: Build Tizen .tpk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'Tailscale/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # net6.0-tizen8.0 per Tailscale/Tailscale.csproj
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Install Tizen .NET workload
+        run: curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh | sudo bash
+
+      - name: Build unsigned .tpk (make tailscaled + dotnet build)
+        run: make build
+
+      - name: Locate .tpk
+        id: tpk
+        run: |
+          f=$(find Tailscale/bin -name '*.tpk' | head -n 1)
+          if [ -z "$f" ]; then echo "No .tpk produced" >&2; exit 1; fi
+          cp "$f" Tailscale.tpk
+          echo "Built: $f"
+
+      - name: Compute release tag
+        id: tag
+        run: echo "tag=tpk-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Tizen .tpk (${{ steps.tag.outputs.tag }})"
+          make_latest: true
+          files: Tailscale.tpk
+          body: |
+            Unsigned Tizen `.tpk` built from upstream `tailscale/tailscale-tizen`.
+            Install via a DUID-bound developer certificate (e.g. Apps2Samsung).
