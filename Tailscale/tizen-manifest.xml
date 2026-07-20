@@ -7,7 +7,7 @@
                   multiple="false"
                   taskmanage="true"
                   nodisplay="false"
-                  api-version="11">
+                  api-version="8.0">
     <label>Tailscale</label>
     <icon>Tailscale.png</icon>
     <splash-screens />
