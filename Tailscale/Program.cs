@@ -48,6 +48,7 @@ namespace Tailscale
         private TextLabel _aboutVersionLabel;
         private Button _aboutBackBtn;
         private string _tailscaledVersion = "(unknown)";
+        private string _vpnProbe = "(vpnsvc not probed)";
 
         // QR widgets.
         private TextLabel _qrStatusLabel;
@@ -92,6 +93,7 @@ namespace Tailscale
             Diag("OnCreate uiCtx=" + (_uiCtx?.GetType().Name ?? "null"));
             try { BuildUI(); Diag("UI built"); }
             catch (Exception ex) { Diag("UI build error: " + ex); }
+            ProbeVpnService();
             Task.Run(BackendMain);
             Task.Run(StartDiagServer);
         }
@@ -222,7 +224,8 @@ namespace Tailscale
             {
                 _aboutVersionLabel.Text =
                     "App version: 0.1.0\n" +
-                    "Tailscale: " + _tailscaledVersion;
+                    "Tailscale: " + _tailscaledVersion + "\n" +
+                    _vpnProbe;
                 ShowOnly(_aboutView);
                 FocusManager.Instance.SetCurrentFocusView(_aboutBackBtn);
             });
@@ -420,6 +423,35 @@ namespace Tailscale
                 Diag("BackendMain error: " + ex);
                 RunOnUi(() => _loggedOutStatus.Text = "Error: " + ex.Message);
             }
+        }
+
+        // ---- vpnservice probe (Partner-privilege validation) -----------------
+        // capi-vpnsvc is the native Tizen VPN client. Its APIs need
+        // http://tizen.org/privilege/vpnservice, a partner-level privilege only granted to
+        // Partner-signed packages — so vpnsvc_init returning 0 (VPNSVC_ERROR_NONE) proves the
+        // Partner certificate actually unlocked the privilege (the acceptance test).
+        [DllImport("libcapi-vpnsvc.so.0", EntryPoint = "vpnsvc_init")]
+        private static extern int vpnsvc_init(string name, out IntPtr handle);
+
+        [DllImport("libcapi-vpnsvc.so.0", EntryPoint = "vpnsvc_deinit")]
+        private static extern int vpnsvc_deinit(IntPtr handle);
+
+        private void ProbeVpnService()
+        {
+            try
+            {
+                int rc = vpnsvc_init("tailscale0", out IntPtr handle);
+                _vpnProbe = rc == 0
+                    ? "vpnsvc_init: VPNSVC_ERROR_NONE (0) — partner privilege granted"
+                    : "vpnsvc_init: error " + rc + " — privilege NOT granted";
+                if (rc == 0 && handle != IntPtr.Zero)
+                    vpnsvc_deinit(handle);
+            }
+            catch (Exception ex)
+            {
+                _vpnProbe = "vpnsvc probe failed to load: " + ex.Message;
+            }
+            Diag("VPNSVC " + _vpnProbe);
         }
 
         [DllImport("libc", SetLastError = true)]
