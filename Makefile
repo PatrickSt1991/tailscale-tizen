@@ -111,6 +111,16 @@ help:
 	@echo "  SIGN_PROFILE=$(SIGN_PROFILE)"
 	@echo "  DEVICE=$(DEVICE)"
 
+# Spike: Tailscale engine as a CGO c-shared library for in-process (dlopen)
+# use, sidestepping the retail-TV seccomp block on execve. Requires an armv7
+# cross C toolchain (gcc-arm-linux-gnueabihf); c-shared forces CGO_ENABLED=1.
+CC_ARM      ?= arm-linux-gnueabihf-gcc
+CSHARED_OUT ?= cshared/libtsspike.so
+.PHONY: cshared
+cshared:
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) \
+	  go build -buildmode=c-shared -o $(CSHARED_OUT) ./cshared
+
 tailscaled: Tailscale/lib/tailscaled
 
 # Cross-compile tailscaled at the version pinned in go.mod. `go build` from
