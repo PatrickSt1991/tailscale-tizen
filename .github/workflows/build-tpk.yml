@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       goarch:
-        description: "tailscaled target arch (arm = real TVs, amd64 = x86_64 emulator, 386 = x86 emulator)"
+        description: "tailscaled target arch (arm64 = Tizen 8 TVs, arm = 32-bit ARM TVs, amd64/386 = x86 TV emulator)"
         type: choice
-        options: [arm, amd64, "386"]
-        default: arm
+        options: [arm64, arm, amd64, "386"]
+        default: arm64
   push:
     branches: [main]
     paths:
@@ -42,7 +42,7 @@ jobs:
         run: curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh | bash
 
       - name: Build unsigned .tpk (make tailscaled + dotnet build)
-        run: make build GOARCH=${{ github.event.inputs.goarch || 'arm' }}
+        run: make build GOARCH=${{ github.event.inputs.goarch || 'arm64' }}
 
       - name: Locate .tpk
         id: tpk
@@ -55,20 +55,24 @@ jobs:
       - name: Compute release tag
         id: tag
         run: |
-          arch="${{ github.event.inputs.goarch || 'arm' }}"
+          arch="${{ github.event.inputs.goarch || 'arm64' }}"
           sha=$(git rev-parse --short HEAD)
-          if [ "$arch" = "arm" ]; then
-            # Real-TV build: canonical tag, marked latest.
-            echo "tag=tpk-$sha"                       >> "$GITHUB_OUTPUT"
-            echo "name=Tizen .tpk (tpk-$sha)"          >> "$GITHUB_OUTPUT"
-            echo "latest=true"                         >> "$GITHUB_OUTPUT"
-            echo "arch=arm (ARMv7, real Samsung TVs)"  >> "$GITHUB_OUTPUT"
+          if [ "$arch" = "arm64" ]; then
+            # Default Tizen 8 (aarch64) build: canonical tag, marked latest.
+            echo "tag=tpk-$sha"                          >> "$GITHUB_OUTPUT"
+            echo "name=Tizen .tpk (tpk-$sha)"             >> "$GITHUB_OUTPUT"
+            echo "latest=true"                            >> "$GITHUB_OUTPUT"
+            echo "arch=arm64 (aarch64, Tizen 8 TVs)"      >> "$GITHUB_OUTPUT"
           else
-            # Emulator build: arch-suffixed tag, never latest (doesn't run on real TVs).
-            echo "tag=tpk-$arch-$sha"                          >> "$GITHUB_OUTPUT"
-            echo "name=Tizen .tpk — emulator/$arch (tpk-$arch-$sha)" >> "$GITHUB_OUTPUT"
-            echo "latest=false"                                >> "$GITHUB_OUTPUT"
-            echo "arch=$arch (x86 TV emulator only)"           >> "$GITHUB_OUTPUT"
+            # Non-default arch: suffixed tag, never latest.
+            echo "tag=tpk-$arch-$sha"                     >> "$GITHUB_OUTPUT"
+            echo "name=Tizen .tpk — $arch (tpk-$arch-$sha)" >> "$GITHUB_OUTPUT"
+            echo "latest=false"                           >> "$GITHUB_OUTPUT"
+            case "$arch" in
+              amd64|386) echo "arch=$arch (x86 TV emulator only)" >> "$GITHUB_OUTPUT" ;;
+              arm)       echo "arch=arm/v7 (32-bit ARM TVs)"      >> "$GITHUB_OUTPUT" ;;
+              *)         echo "arch=$arch"                        >> "$GITHUB_OUTPUT" ;;
+            esac
           fi
 
       - uses: softprops/action-gh-release@v2
