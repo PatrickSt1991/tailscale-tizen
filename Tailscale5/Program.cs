@@ -501,11 +501,15 @@ namespace Tailscale
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            psi.ArgumentList.Add("--tun=userspace-networking");
-            psi.ArgumentList.Add("--statedir=" + _stateDir);
-            psi.ArgumentList.Add("--socket=" + _socket);
-            psi.ArgumentList.Add("--state=" + Path.Combine(_stateDir, "tailscaled.state"));
-            psi.ArgumentList.Add("--verbose=1");
+            // ProcessStartInfo.ArgumentList (.NET Core 2.1+) is not in the
+            // tizen50 compile surface, so build a quoted Arguments string. The
+            // Tizen data dir has no spaces, but quote the paths defensively.
+            psi.Arguments =
+                "--tun=userspace-networking " +
+                "--statedir=\"" + _stateDir + "\" " +
+                "--socket=\"" + _socket + "\" " +
+                "--state=\"" + Path.Combine(_stateDir, "tailscaled.state") + "\" " +
+                "--verbose=1";
             _tailscaledProc = Process.Start(psi);
             _tailscaledProc.OutputDataReceived += (s, e) => { if (e.Data != null) Diag("tailscaled> " + e.Data); };
             _tailscaledProc.ErrorDataReceived += (s, e) => { if (e.Data != null) Diag("tailscaled> " + e.Data); };
