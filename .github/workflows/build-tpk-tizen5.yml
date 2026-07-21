@@ -46,6 +46,12 @@ jobs:
       - name: Cross-compile tailscaled (armv7)
         run: make tailscaled GOARCH=arm GOARM=7
 
+      # Stage into shared/res BEFORE dotnet build: the classic Tizen.NET.Sdk
+      # globs shared/res at evaluation time, so the file must exist on disk
+      # before the build is invoked to end up in the tpk.
+      - name: Stage tailscaled into shared/res
+        run: cp Tailscale/lib/tailscaled Tailscale5/shared/res/tailscaled
+
       - name: Setup .NET Core 3.1 SDK
         uses: actions/setup-dotnet@v4
         with:

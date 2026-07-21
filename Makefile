@@ -122,6 +122,11 @@ Tailscale/lib/tailscaled: go.mod
 	  -o $(CURDIR)/Tailscale/lib/tailscaled tailscale.com/cmd/tailscaled
 
 build: tailscaled
+	@if [ "$(PROJECT)" = "Tailscale5" ]; then \
+	  mkdir -p Tailscale5/shared/res; \
+	  cp Tailscale/lib/tailscaled Tailscale5/shared/res/tailscaled; \
+	  echo "staged tailscaled into Tailscale5/shared/res"; \
+	fi
 	cd $(PROJECT) && $(DOTNET) build
 
 # Re-sign the dotnet-produced tpk with our Samsung-issued cert. tz/tizen-core
