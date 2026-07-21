@@ -13,6 +13,9 @@
 /Tailscale/lib/tailscaled
 /Tailscale/lib/tailscale
 
+# Tizen 5.0 port: tailscaled staged into shared/res at build time (see csproj)
+/Tailscale5/shared/res/tailscaled
+
 # Signed packages
 *.signed.tpk
 DotnetProbe.signed.tpk

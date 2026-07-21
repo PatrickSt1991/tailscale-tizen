@@ -34,18 +34,17 @@
     <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
-  <!-- Share the Go binary the Makefile builds into ../Tailscale/lib. It gets
-       packaged under lib/ so Program.cs's StageBinaries (installDir/../lib/
-       tailscaled) resolves identically to the Tizen 8 build. -->
-  <ItemGroup>
-    <Content Include="..\Tailscale\lib\tailscaled" Link="lib\tailscaled">
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-      <TizenIncludeInPackage>true</TizenIncludeInPackage>
-    </Content>
-    <Content Include="..\Tailscale\lib\tailscale" Link="lib\tailscale" Condition="Exists('..\Tailscale\lib\tailscale')">
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-      <TizenIncludeInPackage>true</TizenIncludeInPackage>
-    </Content>
-  </ItemGroup>
+  <!-- Stage the Go binary (built by `make tailscaled` into ../Tailscale/lib)
+       into shared/res before the build. Unlike a lib/ Content item pointing
+       outside the project dir - which the classic Tizen.NET.Sdk silently drops
+       from the tpk - the shared/res folder is reliably packaged. Program.cs
+       reads it back from DirectoryInfo.SharedResource at runtime. The staged
+       copy is gitignored. -->
+  <Target Name="StageTailscaled" BeforeTargets="Build">
+    <Copy SourceFiles="..\Tailscale\lib\tailscaled"
+          DestinationFiles="shared\res\tailscaled"
+          SkipUnchangedFiles="true"
+          Condition="Exists('..\Tailscale\lib\tailscaled')" />
+  </Target>
 
 </Project>

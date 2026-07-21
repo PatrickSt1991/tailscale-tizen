@@ -481,15 +481,20 @@ namespace Tailscale
 
         private void StageBinaries()
         {
-            string installDir = Tizen.Applications.Application.Current.DirectoryInfo.Resource;
             string dataDir = Tizen.Applications.Application.Current.DirectoryInfo.Data;
             _stateDir = Path.Combine(dataDir, "state");
             Directory.CreateDirectory(_stateDir);
             _socket = Path.Combine(dataDir, "tailscaled.sock");
             _tailscaledExe = Path.Combine(dataDir, "tailscaled");
-            File.Copy(Path.GetFullPath(Path.Combine(installDir, "..", "lib", "tailscaled")), _tailscaledExe, overwrite: true);
+            // tailscaled is shipped in shared/res (the classic Tizen.NET.Sdk
+            // reliably packages that folder; it does NOT package a lib/ Content
+            // item pointing outside the project dir). Copy it out to the
+            // writable data dir and mark it executable before launching.
+            string srcTailscaled = Path.Combine(
+                Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, "tailscaled");
+            File.Copy(srcTailscaled, _tailscaledExe, overwrite: true);
             chmod(_tailscaledExe, 0x1ED); // 0755
-            Diag("staged tailscaled to " + _tailscaledExe);
+            Diag("staged tailscaled from " + srcTailscaled + " to " + _tailscaledExe);
         }
 
         private void StartTailscaled()
