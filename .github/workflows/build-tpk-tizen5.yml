@@ -1,0 +1,90 @@
+name: Build Tizen 5.0 .tpk
+
+# Separate from build-tpk.yml (which builds the net6.0-tizen8.0 app with the
+# `dotnet workload` toolchain). This builds the classic tizen50 project in
+# Tailscale5/ for the Tizen 5.0 TV (Samsung RU7020, armv7).
+#
+# Classic Tizen.NET.Sdk quirks baked in below:
+#   - .NET Core 3.1 SDK. A .NET 5/6/7/8 SDK fails with NETSDK1013
+#     "TargetFramework 'tizen50' was not recognized".
+#   - ubuntu-22.04. .NET Core 3.1's runtime needs libssl1.1 + libicu, absent on
+#     24.04; DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 also avoids the ICU dep.
+#   - Tizen.NET.Sdk emits AND default-signs the .tpk during `dotnet build`; no
+#     separate packaging step. The default signature is NOT accepted by a retail
+#     TV — re-sign with a DUID-bound developer cert (e.g. via Apps2Samsung)
+#     before installing.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, tizen5-port]
+    paths:
+      - 'Tailscale5/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # tailscaled for the RU7020 = 32-bit ARMv7. Writes into Tailscale/lib,
+      # which Tailscale5.csproj packages via ../Tailscale/lib.
+      - name: Cross-compile tailscaled (armv7)
+        run: make tailscaled GOARCH=arm GOARM=7
+
+      - name: Setup .NET Core 3.1 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '3.1.x'
+
+      - name: Build tizen50 .tpk (emits + default-signs)
+        run: dotnet build Tailscale5/Tailscale5.csproj -c Debug
+
+      - name: Locate .tpk
+        id: tpk
+        run: |
+          f=$(find Tailscale5/bin -name '*.tpk' | head -n 1)
+          if [ -z "$f" ]; then echo "No .tpk produced" >&2; exit 1; fi
+          cp "$f" Tailscale-tizen5-arm.tpk
+          echo "Built: $f"
+
+      # Always publish the build as a run artifact so feature-branch pushes are
+      # downloadable/testable without cutting a release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tailscale-tizen5-arm
+          path: Tailscale-tizen5-arm.tpk
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          echo "tag=tpk-tizen5-arm-$sha" >> "$GITHUB_OUTPUT"
+
+      # Only cut a GitHub release from main or a manual dispatch — never on
+      # feature-branch pushes.
+      - if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Tizen 5.0 .tpk — armv7 (tpk-tizen5-arm-${{ github.sha }})
+          make_latest: false
+          files: Tailscale-tizen5-arm.tpk
+          body: |
+            Tizen **5.0** (armv7) `.tpk` for Samsung RU7-series TVs, built from `Tailscale5/`.
+            Default-signed by Tizen.NET.Sdk — **re-sign with your DUID-bound developer
+            certificate** (e.g. via Apps2Samsung) before installing on a retail TV.

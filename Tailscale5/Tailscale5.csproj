@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Tizen 5.0 port. Target device: Samsung RU7020 (platform_version 5.0, armv7).
+      - TFM tizen50  -> TizenFX API level 5, .NET Core runtime shipped with 5.0
+      - api-version 5.0 in tizen-manifest.xml
+      - tailscaled cross-compiled GOARCH=arm GOARM=7 (see Makefile)
+
+    We deliberately keep AssemblyName=Tailscale (and the same package id) so the
+    exec="Tailscale.dll" manifest entry and Program.cs resource lookups match the
+    Tizen 8 build; only the transport (LocalApi) and UI framework version differ.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>tizen50</TargetFramework>
+    <RootNamespace>Tailscale</RootNamespace>
+    <AssemblyName>Tailscale</AssemblyName>
+    <DebugType>portable</DebugType>
+    <!-- tizen50 defaults to C# 7.3 under the 3.1 SDK; we use C# 8 `using`
+         declarations. All runtime-dependent C# 8 features (async streams) were
+         deliberately avoided, so 8.0 needs no BCL polyfill on 5.0's runtime. -->
+    <LangVersion>8.0</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Tizen.NET.Sdk provides the tizen50 TFM build tasks + packaging. -->
+    <PackageReference Include="Tizen.NET.Sdk" Version="1.1.9" />
+    <!-- TizenFX API level 5 (Tizen 5.0). Pinned to the last 5.0.0.x. -->
+    <PackageReference Include="Tizen.NET" Version="5.0.0.14562" />
+    <!-- JsonNode lives in System.Text.Json 6.0+; the netstandard2.0 asset runs
+         on the Tizen 5.0 .NET Core runtime. Not in the base framework, so we
+         bring it in explicitly. -->
+    <PackageReference Include="System.Text.Json" Version="6.0.10" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
+  </ItemGroup>
+
+  <!-- Share the Go binary the Makefile builds into ../Tailscale/lib. It gets
+       packaged under lib/ so Program.cs's StageBinaries (installDir/../lib/
+       tailscaled) resolves identically to the Tizen 8 build. -->
+  <ItemGroup>
+    <Content Include="..\Tailscale\lib\tailscaled" Link="lib\tailscaled">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
+    <Content Include="..\Tailscale\lib\tailscale" Link="lib\tailscale" Condition="Exists('..\Tailscale\lib\tailscale')">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
+  </ItemGroup>
+
+</Project>

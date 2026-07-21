@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns="http://tizen.org/ns/packages" api-version="5.0" package="com.tailscale.tailscale" version="0.1.0">
+  <profile name="tv" />
+  <ui-application appid="com.tailscale.tailscale"
+                  exec="Tailscale.dll"
+                  type="dotnet"
+                  multiple="false"
+                  taskmanage="true"
+                  nodisplay="false"
+                  api-version="5.0">
+    <label>Tailscale</label>
+    <icon>Tailscale.png</icon>
+    <splash-screens />
+  </ui-application>
+  <privileges>
+    <privilege>http://tizen.org/privilege/internet</privilege>
+    <privilege>http://tizen.org/privilege/network.get</privilege>
+    <privilege>http://tizen.org/privilege/network.set</privilege>
+    <!-- vpnservice is partner-level; on 5.0 it may not be grantable with a
+         standard author cert. The netstack (userspace-networking) path does NOT
+         require it - it is only read by the About-screen probe. If signing/
+         install rejects it on 5.0, drop this line. -->
+    <privilege>http://tizen.org/privilege/vpnservice</privilege>
+  </privileges>
+</manifest>

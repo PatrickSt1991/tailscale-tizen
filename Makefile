@@ -24,12 +24,23 @@ TS_DIST_P12    ?= $(HOME)/tizen-studio-data/keystore/tv-samsung/distributor.p12
 
 APP_ID    := com.tailscale.tailscale
 APP_VER   := 0.1.0
-TPK_BUILT := Tailscale/bin/Debug/net6.0-tizen8.0/$(APP_ID)-$(APP_VER).tpk
+
+# Which project/TFM to build. Defaults reproduce the original Tizen 8 build
+# exactly. For the Tizen 5.0 TV (Samsung RU7020, armv7):
+#   make install PROJECT=Tailscale5 TFM=tizen50 GOARCH=arm DEVICE=192.168.2.23:26101
+PROJECT ?= Tailscale
+TFM     ?= net6.0-tizen8.0
+# Recursively-expanded (=) and find-based so it resolves after `build` has run,
+# and copes with the classic tizen50 build landing its .tpk under a differently
+# named output dir (bin/Debug/tizen50 vs bin/Debug/netcoreapp2.0) than the
+# net6.0-tizen8.0 build.
+TPK_BUILT = $(shell find $(PROJECT)/bin -name '$(APP_ID)-$(APP_VER).tpk' 2>/dev/null | head -n 1)
 TPK_OUT   := Tailscale.signed.tpk
 
 # Target CPU for the tailscaled binary. Default arm64 (aarch64) = Tizen 8 TVs.
-# Overrides: `make build GOARCH=arm` (32-bit ARMv7 TVs), `GOARCH=amd64` (x86_64
-# TV emulator), `GOARCH=386` (32-bit x86 TV emulator).
+# Overrides: `make build GOARCH=arm` (32-bit ARMv7 TVs, incl. the Tizen 5.0
+# RU7020), `GOARCH=amd64` (x86_64 TV emulator), `GOARCH=386` (32-bit x86 TV
+# emulator).
 GOARCH ?= arm64
 GOARM  ?= 7
 ifeq ($(GOARCH),arm)
@@ -111,7 +122,7 @@ Tailscale/lib/tailscaled: go.mod
 	  -o $(CURDIR)/Tailscale/lib/tailscaled tailscale.com/cmd/tailscaled
 
 build: tailscaled
-	cd Tailscale && $(DOTNET) build
+	cd $(PROJECT) && $(DOTNET) build
 
 # Re-sign the dotnet-produced tpk with our Samsung-issued cert. tz/tizen-core
 # stashes the PKCS#12 password via the system secret store: libsecret on
