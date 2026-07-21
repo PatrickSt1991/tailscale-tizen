@@ -27,7 +27,16 @@ APP_VER   := 0.1.0
 TPK_BUILT := Tailscale/bin/Debug/net6.0-tizen8.0/$(APP_ID)-$(APP_VER).tpk
 TPK_OUT   := Tailscale.signed.tpk
 
-GO_ENV := CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7
+# Target CPU for the tailscaled binary. Default arm/v7 = real Samsung TVs.
+# Override for the x86 TV emulator: `make build GOARCH=amd64` (x86_64 emulator)
+# or `make build GOARCH=386` (32-bit x86 emulator).
+GOARCH ?= arm
+GOARM  ?= 7
+ifeq ($(GOARCH),arm)
+GO_ENV := CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=$(GOARM)
+else
+GO_ENV := CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH)
+endif
 
 .PHONY: all tailscaled build pack install run uninstall clean help check-deps
 
