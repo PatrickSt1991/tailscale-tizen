@@ -25,6 +25,7 @@
 //   - WatchIPNBus, the streaming ipn.Notify long-poll
 using System;
 using System.IO;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -33,6 +34,32 @@ using System.Threading.Tasks;
 
 namespace Tailscale
 {
+    // Tizen 5.0 compiles against a netstandard2.0-level surface that lacks
+    // System.Net.Sockets.UnixDomainSocketEndPoint (that type needs 2.1). So we
+    // hand-roll the AF_UNIX endpoint: Socket.Connect marshals an EndPoint via
+    // Serialize(), and a Linux sockaddr_un is just [family:2][path][NUL]. This
+    // is the well-worn pre-2.1 workaround.
+    sealed class UnixEndPoint : EndPoint
+    {
+        private readonly string _path;
+        public UnixEndPoint(string path) { _path = path; }
+        public override AddressFamily AddressFamily => AddressFamily.Unix;
+
+        public override SocketAddress Serialize()
+        {
+            byte[] p = Encoding.UTF8.GetBytes(_path);
+            // The SocketAddress ctor writes the family into bytes [0..1]; we
+            // fill sun_path from offset 2 and NUL-terminate.
+            var sa = new SocketAddress(AddressFamily.Unix, 2 + p.Length + 1);
+            for (int i = 0; i < p.Length; i++) sa[2 + i] = p[i];
+            sa[2 + p.Length] = 0;
+            return sa;
+        }
+
+        public override EndPoint Create(SocketAddress socketAddress) => this;
+        public override string ToString() => _path;
+    }
+
     sealed class LocalApi : IDisposable
     {
         private readonly string _socketPath;
@@ -56,7 +83,7 @@ namespace Tailscale
         private async Task<Socket> ConnectAsync()
         {
             var s = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-            var ep = new UnixDomainSocketEndPoint(_socketPath);
+            var ep = new UnixEndPoint(_socketPath);
             await Task.Factory.FromAsync(
                 (cb, st) => s.BeginConnect(ep, cb, st),
                 s.EndConnect,
