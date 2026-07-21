@@ -34,15 +34,10 @@
     <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
-  <!-- SPIKE: the CGO c-shared Tailscale engine. Copied into the project dir by
-       CI before build; PreserveNewest lands it in the output (bin/) so it
-       packages there and DllImport("libtsspike.so") resolves it next to
-       Tailscale.dll. Gitignored. -->
-  <ItemGroup>
-    <Content Include="libtsspike.so" Condition="Exists('libtsspike.so')">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
+  <!-- SPIKE: the CGO c-shared Tailscale engine ships in shared/res (staged
+       there by CI before build, like tailscaled). Program.cs dlopen()s it by
+       absolute path from DirectoryInfo.SharedResource — the Tizen .NET launcher
+       doesn't search bin/ for native libs, so DllImport-by-name doesn't work. -->
 
   <!-- tailscaled ships inside shared/res, which the classic Tizen.NET.Sdk
        reliably packages (a lib/ Content item pointing outside the project dir

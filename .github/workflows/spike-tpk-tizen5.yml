@@ -41,10 +41,10 @@ jobs:
       - name: Build c-shared engine (armv7, CGO)
         run: make cshared
 
-      # Into the project dir so the csproj's PreserveNewest Content lands it in
-      # bin/ (DllImport search path), before dotnet build evaluates.
-      - name: Stage libtsspike.so into the project
-        run: cp cshared/libtsspike.so Tailscale5/libtsspike.so
+      # Into shared/res BEFORE dotnet build (classic SDK globs shared/res at
+      # eval time). Program.cs dlopen()s it by absolute path from there.
+      - name: Stage libtsspike.so into shared/res
+        run: cp cshared/libtsspike.so Tailscale5/shared/res/libtsspike.so
 
       - name: Setup .NET Core 3.1 SDK
         uses: actions/setup-dotnet@v4
@@ -54,16 +54,16 @@ jobs:
       - name: Build tizen50 .tpk
         run: dotnet build Tailscale5/Tailscale5.csproj -c Debug
 
-      - name: Locate + verify .tpk contains bin/libtsspike.so
+      - name: Locate + verify .tpk contains shared/res/libtsspike.so
         run: |
           f=$(find Tailscale5/bin -name '*.tpk' | head -n 1)
           if [ -z "$f" ]; then echo "No .tpk produced" >&2; exit 1; fi
           cp "$f" Tailscale-tizen5-spike.tpk
           echo "Built: $f"
-          if unzip -l "$f" | grep -q 'bin/libtsspike.so'; then
-            echo "OK: libtsspike.so is packaged in bin/"
+          if unzip -l "$f" | grep -q 'shared/res/libtsspike.so'; then
+            echo "OK: libtsspike.so is packaged in shared/res/"
           else
-            echo "FAIL: libtsspike.so NOT in bin/ — DllImport will not resolve" >&2
+            echo "FAIL: libtsspike.so NOT in shared/res/" >&2
             unzip -l "$f" | grep -iE 'libtsspike|\.so' || true
             exit 1
           fi

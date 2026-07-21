@@ -427,36 +427,99 @@ namespace Tailscale
         // ---- Backend ----------------------------------------------------------
 
         // SPIKE build: instead of spawning tailscaled (execve → EPERM on retail
-        // 5.0), P/Invoke the CGO c-shared library so tailscale runs IN-PROCESS.
-        // Success = the Go runtime comes alive and tsnet logs its auth URL, all
-        // visible in the :8081 diag. This validates dlopen + Go-in-process under
-        // the 5.0 sandbox before we invest in the full tailscaled-as-lib port.
-        [DllImport("libtsspike.so", EntryPoint = "TsSpike", CallingConvention = CallingConvention.Cdecl)]
-        private static extern IntPtr TsSpike(string dir, string logPath);
+        // 5.0), load the CGO c-shared library IN-PROCESS so tailscale runs via
+        // dlopen (not execve) and sidesteps the seccomp block. Success = the Go
+        // runtime comes alive and tsnet logs its auth URL, visible at :8081.
+        //
+        // We dlopen by ABSOLUTE PATH rather than DllImport-by-name: the Tizen
+        // .NET launcher doesn't search bin/ for native libs, so a bare
+        // DllImport("libtsspike.so") fails with DllNotFound. dlopen also gives
+        // us dlerror() for real diagnostics (noexec / Smack / missing dep).
+        [DllImport("libdl.so.2", EntryPoint = "dlopen", CharSet = CharSet.Ansi)]
+        private static extern IntPtr dlopen(string filename, int flags);
+        [DllImport("libdl.so.2", EntryPoint = "dlsym", CharSet = CharSet.Ansi)]
+        private static extern IntPtr dlsym(IntPtr handle, string symbol);
+        [DllImport("libdl.so.2", EntryPoint = "dlerror")]
+        private static extern IntPtr dlerror();
+
+        private const int RTLD_NOW = 0x002;
+        private const int RTLD_GLOBAL = 0x100;
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate IntPtr TsSpikeDelegate(
+            [MarshalAs(UnmanagedType.LPStr)] string dir,
+            [MarshalAs(UnmanagedType.LPStr)] string logPath);
+
+        private IntPtr TryDlopen(string path)
+        {
+            if (!File.Exists(path)) { Diag("dlopen: not present at " + path); return IntPtr.Zero; }
+            dlerror(); // clear any prior error
+            IntPtr h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+            if (h == IntPtr.Zero)
+            {
+                IntPtr e = dlerror();
+                Diag("dlopen FAILED " + path + " -> " + (Marshal.PtrToStringAnsi(e) ?? "(no dlerror)"));
+            }
+            else Diag("dlopen OK " + path);
+            return h;
+        }
 
         private async Task BackendMain()
         {
             try
             {
                 string dataDir = Tizen.Applications.Application.Current.DirectoryInfo.Data;
+                string sharedRes = Tizen.Applications.Application.Current.DirectoryInfo.SharedResource;
                 string tsdir = Path.Combine(dataDir, "tsnet");
                 Directory.CreateDirectory(tsdir);
                 string logPath = Path.Combine(dataDir, "spike.log");
                 try { File.WriteAllText(logPath, ""); } catch { }
 
-                Diag("SPIKE: calling TsSpike (in-process c-shared) …");
-                RunOnUi(() => _loggedOutStatus.Text = "Spike: starting in-process tailscale… (see :8081)");
+                Diag("SPIKE: loading libtsspike.so via dlopen …");
+                RunOnUi(() => _loggedOutStatus.Text = "Spike: loading in-process engine… (see :8081)");
+
+                // Try the RO image first; fall back to a chmod'd copy in the
+                // writable data dir (in case shared/res isn't exec-mmap'able).
+                string roPath = Path.Combine(sharedRes, "libtsspike.so");
+                IntPtr h = TryDlopen(roPath);
+                if (h == IntPtr.Zero)
+                {
+                    try
+                    {
+                        string dst = Path.Combine(dataDir, "libtsspike.so");
+                        File.Copy(roPath, dst, true);
+                        chmod(dst, 0x1ED); // 0755
+                        Diag("SPIKE: copied .so to data dir, retrying dlopen");
+                        h = TryDlopen(dst);
+                    }
+                    catch (Exception ex) { Diag("SPIKE: data-dir copy fallback: " + ex.Message); }
+                }
+
+                if (h == IntPtr.Zero)
+                {
+                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED: dlopen (see :8081)");
+                    return;
+                }
+
+                IntPtr sym = dlsym(h, "TsSpike");
+                if (sym == IntPtr.Zero)
+                {
+                    Diag("SPIKE: dlsym(TsSpike) failed: " + (Marshal.PtrToStringAnsi(dlerror()) ?? "?"));
+                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED: dlsym (see :8081)");
+                    return;
+                }
 
                 try
                 {
-                    IntPtr r = TsSpike(tsdir, logPath);
+                    var fn = Marshal.GetDelegateForFunctionPointer<TsSpikeDelegate>(sym);
+                    IntPtr r = fn(tsdir, logPath);
                     Diag("SPIKE: TsSpike returned: " + (Marshal.PtrToStringAnsi(r) ?? "(null)"));
-                    RunOnUi(() => _loggedOutStatus.Text = "Spike: c-shared loaded — see :8081");
+                    RunOnUi(() => _loggedOutStatus.Text = "Spike: engine loaded — see :8081");
                 }
                 catch (Exception ex)
                 {
-                    Diag("SPIKE: TsSpike P/Invoke FAILED: " + ex);
-                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED (dlopen/P-Invoke): " + ex.Message);
+                    Diag("SPIKE: TsSpike invoke FAILED: " + ex);
+                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED (invoke): " + ex.Message);
                     return;
                 }
 

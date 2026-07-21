@@ -19,7 +19,7 @@
 # c-shared spike build outputs
 /cshared/libtsspike.so
 /cshared/libtsspike.h
-/Tailscale5/libtsspike.so
+/Tailscale5/shared/res/libtsspike.so
 
 # Signed packages
 *.signed.tpk
