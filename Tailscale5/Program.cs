@@ -425,24 +425,63 @@ namespace Tailscale
 
         // ---- Backend ----------------------------------------------------------
 
+        // SPIKE build: instead of spawning tailscaled (execve → EPERM on retail
+        // 5.0), P/Invoke the CGO c-shared library so tailscale runs IN-PROCESS.
+        // Success = the Go runtime comes alive and tsnet logs its auth URL, all
+        // visible in the :8081 diag. This validates dlopen + Go-in-process under
+        // the 5.0 sandbox before we invest in the full tailscaled-as-lib port.
+        [DllImport("libtsspike.so", EntryPoint = "TsSpike", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr TsSpike(string dir, string logPath);
+
         private async Task BackendMain()
         {
             try
             {
-                StageBinaries();
-                StartTailscaled();
-                await Task.Delay(750);
-                _api = new LocalApi(_socket);
-                // Always Start the engine so we'll receive accurate state
-                // updates (Stopped vs NeedsLogin vs Running). We do NOT call
-                // StartLoginInteractive here -- the user has to ask for it via
-                // the "Log in" button.
-                try { await _api.Start(); } catch (Exception ex) { Diag("Start: " + ex.Message); }
-                await WatchBus();
+                string dataDir = Tizen.Applications.Application.Current.DirectoryInfo.Data;
+                string tsdir = Path.Combine(dataDir, "tsnet");
+                Directory.CreateDirectory(tsdir);
+                string logPath = Path.Combine(dataDir, "spike.log");
+                try { File.WriteAllText(logPath, ""); } catch { }
+
+                Diag("SPIKE: calling TsSpike (in-process c-shared) …");
+                RunOnUi(() => _loggedOutStatus.Text = "Spike: starting in-process tailscale… (see :8081)");
+
+                try
+                {
+                    IntPtr r = TsSpike(tsdir, logPath);
+                    Diag("SPIKE: TsSpike returned: " + (Marshal.PtrToStringAnsi(r) ?? "(null)"));
+                    RunOnUi(() => _loggedOutStatus.Text = "Spike: c-shared loaded — see :8081");
+                }
+                catch (Exception ex)
+                {
+                    Diag("SPIKE: TsSpike P/Invoke FAILED: " + ex);
+                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED (dlopen/P-Invoke): " + ex.Message);
+                    return;
+                }
+
+                // Tail spike.log (written by the Go side) into the diag so the
+                // auth URL / errors show up at :8081.
+                long pos = 0;
+                while (true)
+                {
+                    await Task.Delay(1500);
+                    try
+                    {
+                        if (!File.Exists(logPath)) continue;
+                        using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                        fs.Seek(pos, SeekOrigin.Begin);
+                        using var sr = new StreamReader(fs);
+                        string chunk = sr.ReadToEnd();
+                        pos = fs.Position;
+                        foreach (var line in chunk.Split('\n'))
+                            if (line.Trim().Length > 0) Diag("tsnet> " + line.Trim());
+                    }
+                    catch (Exception ex) { Diag("SPIKE tail: " + ex.Message); }
+                }
             }
             catch (Exception ex)
             {
-                Diag("BackendMain error: " + ex);
+                Diag("BackendMain(spike) error: " + ex);
                 RunOnUi(() => _loggedOutStatus.Text = "Error: " + ex.Message);
             }
         }

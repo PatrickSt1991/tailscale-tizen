@@ -119,7 +119,7 @@ CSHARED_OUT ?= cshared/libtsspike.so
 .PHONY: cshared
 cshared:
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) \
-	  go build -buildmode=c-shared -o $(CSHARED_OUT) ./cshared
+	  go build -buildmode=c-shared -ldflags='-s -w' -o $(CSHARED_OUT) ./cshared
 
 tailscaled: Tailscale/lib/tailscaled
 

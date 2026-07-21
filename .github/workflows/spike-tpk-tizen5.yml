@@ -1,0 +1,74 @@
+name: Spike — tizen50 .tpk with in-process c-shared
+
+# Step B of the spike: bundle the CGO c-shared Tailscale engine into the
+# tizen50 .tpk (in bin/, so DllImport resolves it) and let the app P/Invoke it.
+# Install on the retail 5.0 TV and read :8081 — if the Go runtime comes alive
+# and tsnet logs its auth URL, dlopen + in-process tailscale works under the
+# retail sandbox (the whole point).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tizen5-cshared-spike]
+    paths:
+      - 'cshared/**'
+      - 'Tailscale5/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/workflows/spike-tpk-tizen5.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install armv7 cross C toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-linux-gnueabihf
+
+      - name: Build c-shared engine (armv7, CGO)
+        run: make cshared
+
+      # Into the project dir so the csproj's PreserveNewest Content lands it in
+      # bin/ (DllImport search path), before dotnet build evaluates.
+      - name: Stage libtsspike.so into the project
+        run: cp cshared/libtsspike.so Tailscale5/libtsspike.so
+
+      - name: Setup .NET Core 3.1 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '3.1.x'
+
+      - name: Build tizen50 .tpk
+        run: dotnet build Tailscale5/Tailscale5.csproj -c Debug
+
+      - name: Locate + verify .tpk contains bin/libtsspike.so
+        run: |
+          f=$(find Tailscale5/bin -name '*.tpk' | head -n 1)
+          if [ -z "$f" ]; then echo "No .tpk produced" >&2; exit 1; fi
+          cp "$f" Tailscale-tizen5-spike.tpk
+          echo "Built: $f"
+          if unzip -l "$f" | grep -q 'bin/libtsspike.so'; then
+            echo "OK: libtsspike.so is packaged in bin/"
+          else
+            echo "FAIL: libtsspike.so NOT in bin/ — DllImport will not resolve" >&2
+            unzip -l "$f" | grep -iE 'libtsspike|\.so' || true
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tailscale-tizen5-spike
+          path: Tailscale-tizen5-spike.tpk
