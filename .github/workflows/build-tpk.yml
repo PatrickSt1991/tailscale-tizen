@@ -2,6 +2,12 @@ name: Build Tizen .tpk
 
 on:
   workflow_dispatch:
+    inputs:
+      goarch:
+        description: "tailscaled target arch (arm = real TVs, amd64 = x86_64 emulator, 386 = x86 emulator)"
+        type: choice
+        options: [arm, amd64, "386"]
+        default: arm
   push:
     branches: [main]
     paths:
@@ -36,7 +42,7 @@ jobs:
         run: curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh | bash
 
       - name: Build unsigned .tpk (make tailscaled + dotnet build)
-        run: make build
+        run: make build GOARCH=${{ github.event.inputs.goarch || 'arm' }}
 
       - name: Locate .tpk
         id: tpk
@@ -48,14 +54,31 @@ jobs:
 
       - name: Compute release tag
         id: tag
-        run: echo "tag=tpk-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          arch="${{ github.event.inputs.goarch || 'arm' }}"
+          sha=$(git rev-parse --short HEAD)
+          if [ "$arch" = "arm" ]; then
+            # Real-TV build: canonical tag, marked latest.
+            echo "tag=tpk-$sha"                       >> "$GITHUB_OUTPUT"
+            echo "name=Tizen .tpk (tpk-$sha)"          >> "$GITHUB_OUTPUT"
+            echo "latest=true"                         >> "$GITHUB_OUTPUT"
+            echo "arch=arm (ARMv7, real Samsung TVs)"  >> "$GITHUB_OUTPUT"
+          else
+            # Emulator build: arch-suffixed tag, never latest (doesn't run on real TVs).
+            echo "tag=tpk-$arch-$sha"                          >> "$GITHUB_OUTPUT"
+            echo "name=Tizen .tpk — emulator/$arch (tpk-$arch-$sha)" >> "$GITHUB_OUTPUT"
+            echo "latest=false"                                >> "$GITHUB_OUTPUT"
+            echo "arch=$arch (x86 TV emulator only)"           >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Tizen .tpk (${{ steps.tag.outputs.tag }})"
-          make_latest: true
+          name: ${{ steps.tag.outputs.name }}
+          make_latest: ${{ steps.tag.outputs.latest }}
           files: Tailscale.tpk
           body: |
-            Unsigned Tizen `.tpk` built from upstream `tailscale/tailscale-tizen`.
-            Install via a DUID-bound developer certificate (e.g. Apps2Samsung).
+            Unsigned Tizen `.tpk` built from `tailscale/tailscale-tizen`.
+            tailscaled target arch: **${{ steps.tag.outputs.arch }}**.
+            Install via a DUID-bound developer certificate (e.g. Apps2Samsung), or sign
+            with the default Tizen certificate for the emulator.
