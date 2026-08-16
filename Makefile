@@ -112,13 +112,19 @@ help:
 	@echo "  DEVICE=$(DEVICE)"
 
 # Spike: Tailscale engine as a CGO c-shared library for in-process (dlopen)
-# use, sidestepping the retail-TV seccomp block on execve. Requires an armv7
-# cross C toolchain (gcc-arm-linux-gnueabihf); c-shared forces CGO_ENABLED=1.
-CC_ARM      ?= arm-linux-gnueabihf-gcc
+# use, sidestepping the retail-TV seccomp block on execve. c-shared forces
+# CGO_ENABLED=1. CC / CGO_CFLAGS / CGO_LDFLAGS MUST match the target ABI and are
+# supplied by the environment (CI). Tizen 5.0 armv7 = glibc 2.24 + SOFT-FLOAT
+# (softfp), triple armv7l-tizen-linux-gnueabi — CI exports a soft-float CC
+# (arm-linux-gnueabi-gcc, NOT -gnueabihf) with `--sysroot` pointed at an
+# extracted Tizen 5.0 glibc-2.24 rootstrap and `-mfloat-abi=softfp`. Go's
+# linux/arm cgo output is already soft-float, so this matches the TV loader;
+# a hard-float (-gnueabihf) build is what produced the earlier dlopen "internal
+# error". See .github/workflows/spike-tpk-tizen5.yml.
 CSHARED_OUT ?= cshared/libtsspike.so
 .PHONY: cshared
 cshared:
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 CC=$(CC_ARM) \
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 \
 	  go build -buildmode=c-shared -ldflags='-s -w' -o $(CSHARED_OUT) ./cshared
 
 tailscaled: Tailscale/lib/tailscaled
