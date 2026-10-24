@@ -74,6 +74,19 @@ namespace Tailscale
 
         private LocalApi _api;
 
+        // Per-app routing (Forwarder.cs). tailscaled gets --socks5-server on
+        // this loopback port; the forwarder runs localhost listeners that
+        // splice into it, started when IPN state is Running.
+        private const int SocksPort = 1055;
+        private Forwarder _forwarder;
+        private string _forwardsConfigPath;
+
+        private View _forwardsView;
+        private View _forwardsListCard;
+        private Button _forwardsAddBtn;
+        private Button _forwardsClearBtn;
+        private Button _forwardsBackBtn;
+
         // Backend state we track to drive the UI.
         private string _state = "";          // last seen IPN state name
         private string _authUrl;             // most recent BrowseToURL
@@ -141,11 +154,13 @@ namespace Tailscale
             _qrView = BuildQRView();
             _homeView = BuildHomeView();
             _aboutView = BuildAboutView();
+            _forwardsView = BuildForwardsView();
 
             Window.Instance.GetDefaultLayer().Add(_loggedOutView);
             Window.Instance.GetDefaultLayer().Add(_qrView);
             Window.Instance.GetDefaultLayer().Add(_homeView);
             Window.Instance.GetDefaultLayer().Add(_aboutView);
+            Window.Instance.GetDefaultLayer().Add(_forwardsView);
 
             // Default state: nothing has come back from tailscaled yet -- show
             // logged-out so the user isn't staring at a blank screen.
@@ -313,6 +328,9 @@ namespace Tailscale
             _exitNodeBtn = MakeButton("Advertise as exit node", OnExitNodeClicked);
             v.Add(_exitNodeBtn);
 
+            var forwardsBtn = MakeButton("App routing (forwards)", (s, e) => ShowForwards());
+            v.Add(forwardsBtn);
+
             _signOutBtn = MakeButton("Sign out", OnSignOutClicked);
             v.Add(_signOutBtn);
 
@@ -321,11 +339,112 @@ namespace Tailscale
 
             _connectBtn.DownFocusableView = _exitNodeBtn;
             _exitNodeBtn.UpFocusableView = _connectBtn;
-            _exitNodeBtn.DownFocusableView = _signOutBtn;
-            _signOutBtn.UpFocusableView = _exitNodeBtn;
+            _exitNodeBtn.DownFocusableView = forwardsBtn;
+            forwardsBtn.UpFocusableView = _exitNodeBtn;
+            forwardsBtn.DownFocusableView = _signOutBtn;
+            _signOutBtn.UpFocusableView = forwardsBtn;
             _signOutBtn.DownFocusableView = aboutFromHome;
             aboutFromHome.UpFocusableView = _signOutBtn;
             return v;
+        }
+
+        // ---- Forwards (per-app routing) UI ----------------------------------
+
+        private View BuildForwardsView()
+        {
+            var v = NewVerticalStack();
+            ((LinearLayout)v.Layout).VerticalAlignment = VerticalAlignment.Top;
+            ((LinearLayout)v.Layout).Padding = new Extents(0, 0, 80, 80);
+
+            v.Add(NewLogo(440, 140));
+            var title = new TextLabel("App routing (forwards)")
+            {
+                TextColor = TextPrimary,
+                PointSize = 30.0f,
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            v.Add(title);
+
+            var hint = new TextLabel("Point an app at http://127.0.0.1:<port> to reach a tailnet service.")
+            {
+                TextColor = TextSecondary,
+                PointSize = 20.0f,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                MultiLine = true,
+                WidthSpecification = 1100,
+            };
+            v.Add(hint);
+
+            _forwardsListCard = MakeCard();
+            v.Add(_forwardsListCard);
+
+            _forwardsAddBtn = MakeButton("Add Jellyfin forward (127.0.0.1:8096 -> jellyfin:8096)", OnAddJellyfinForward);
+            v.Add(_forwardsAddBtn);
+
+            _forwardsClearBtn = MakeButton("Remove all forwards", OnClearForwards);
+            v.Add(_forwardsClearBtn);
+
+            _forwardsBackBtn = MakeButton("Back", (s, e) =>
+                RunOnUi(() => { ShowOnly(_homeView); FocusManager.Instance.SetCurrentFocusView(_connectBtn); }));
+            v.Add(_forwardsBackBtn);
+
+            _forwardsAddBtn.DownFocusableView = _forwardsClearBtn;
+            _forwardsClearBtn.UpFocusableView = _forwardsAddBtn;
+            _forwardsClearBtn.DownFocusableView = _forwardsBackBtn;
+            _forwardsBackBtn.UpFocusableView = _forwardsClearBtn;
+            return v;
+        }
+
+        private void ShowForwards()
+        {
+            RefreshForwardsList();
+            RunOnUi(() =>
+            {
+                ShowOnly(_forwardsView);
+                FocusManager.Instance.SetCurrentFocusView(_forwardsAddBtn);
+            });
+        }
+
+        private void RefreshForwardsList()
+        {
+            RunOnUi(() =>
+            {
+                if (_forwardsListCard == null) return;
+                while (_forwardsListCard.ChildCount > 0)
+                    _forwardsListCard.Remove(_forwardsListCard.GetChildAt(0));
+
+                var entries = _forwarder?.Entries ?? new System.Collections.Generic.List<ForwardEntry>();
+                if (entries.Count == 0)
+                {
+                    _forwardsListCard.Add(NewRowLabel("No forwards configured.", 24.0f, TextSecondary));
+                    return;
+                }
+                foreach (var e in entries)
+                {
+                    string status = _forwarder.StatusOf(e.LocalPort);
+                    _forwardsListCard.Add(NewRowLabel(
+                        $"127.0.0.1:{e.LocalPort}  ->  {e.TargetHost}:{e.TargetPort}", 26.0f, TextPrimary));
+                    _forwardsListCard.Add(NewRowLabel("   " + status, 20.0f,
+                        status == "listening" ? GreenDot : TextSecondary));
+                }
+            });
+        }
+
+        private void OnAddJellyfinForward(object sender, ClickedEventArgs e)
+        {
+            try
+            {
+                _forwarder?.Add(new ForwardEntry { LocalPort = 8096, TargetHost = "jellyfin", TargetPort = 8096 });
+            }
+            catch (Exception ex) { Diag("OnAddJellyfinForward: " + ex.Message); }
+            RefreshForwardsList();
+        }
+
+        private void OnClearForwards(object sender, ClickedEventArgs e)
+        {
+            try { _forwarder?.RemoveAll(); }
+            catch (Exception ex) { Diag("OnClearForwards: " + ex.Message); }
+            RefreshForwardsList();
         }
 
         private View NewVerticalStack() => new View
@@ -398,7 +517,17 @@ namespace Tailscale
         {
             if (e.Key.State != Key.StateType.Down) return;
             string name = e.Key.KeyPressedName;
-            if (name == "XF86Back" || name == "Escape") Exit();
+            if (name == "XF86Back" || name == "Escape")
+            {
+                // From the Forwards screen, Back returns to Home instead of
+                // quitting the app.
+                if (_forwardsView != null && _forwardsView.Visibility)
+                {
+                    RunOnUi(() => { ShowOnly(_homeView); FocusManager.Instance.SetCurrentFocusView(_connectBtn); });
+                    return;
+                }
+                Exit();
+            }
         }
 
         // ---- Backend ----------------------------------------------------------
@@ -468,6 +597,9 @@ namespace Tailscale
             File.Copy(Path.GetFullPath(Path.Combine(installDir, "..", "lib", "tailscaled")), _tailscaledExe, overwrite: true);
             chmod(_tailscaledExe, 0x1ED); // 0755
             Diag("staged tailscaled to " + _tailscaledExe);
+
+            _forwardsConfigPath = Path.Combine(dataDir, "forwards.json");
+            _forwarder = new Forwarder(SocksPort, _forwardsConfigPath, Diag);
         }
 
         private void StartTailscaled()
@@ -480,6 +612,9 @@ namespace Tailscale
                 RedirectStandardError = true,
             };
             psi.ArgumentList.Add("--tun=userspace-networking");
+            // Per-app routing: expose a loopback SOCKS5 server the in-app
+            // forwarder splices localhost listeners into (see Forwarder.cs).
+            psi.ArgumentList.Add("--socks5-server=localhost:" + SocksPort);
             psi.ArgumentList.Add("--statedir=" + _stateDir);
             psi.ArgumentList.Add("--socket=" + _socket);
             psi.ArgumentList.Add("--state=" + Path.Combine(_stateDir, "tailscaled.state"));
@@ -547,6 +682,7 @@ namespace Tailscale
                 case "NoState":
                 case "NeedsLogin":
                     _userWantsQR = false; // sign-out / fresh start clears the QR intent
+                    _forwarder?.Stop();
                     _authUrl = null;
                     RunOnUi(() =>
                     {
@@ -560,10 +696,11 @@ namespace Tailscale
                 case "Stopped":
                 case "Running":
                     _userWantsQR = false;
-                    RunOnUi(() => ShowOnly(_homeView));
+                    if (name == "Running") _forwarder?.Start(); else _forwarder?.Stop();
+                    RunOnUi(() => { if (_forwardsView == null || !_forwardsView.Visibility) ShowOnly(_homeView); });
                     UpdateStatusDot(name);
                     if (name == "Running" || name == "Stopped") await RefreshIdentity();
-                    RunOnUi(() => FocusManager.Instance.SetCurrentFocusView(_connectBtn));
+                    RunOnUi(() => { if (_forwardsView == null || !_forwardsView.Visibility) FocusManager.Instance.SetCurrentFocusView(_connectBtn); });
                     break;
             }
         }
@@ -696,6 +833,7 @@ namespace Tailscale
             _qrView.Hide();
             _homeView.Hide();
             _aboutView.Hide();
+            _forwardsView?.Hide();
             v.Show();
         }
 
