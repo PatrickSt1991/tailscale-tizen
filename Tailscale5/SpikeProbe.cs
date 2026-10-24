@@ -305,8 +305,10 @@ namespace Tailscale
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // tizen50 (.NET Core 2.x) has no ProcessStartInfo.ArgumentList;
+                // our args are single tokens with no spaces, so join them.
+                Arguments = args == null ? "" : string.Join(" ", args),
             };
-            foreach (var a in args) psi.ArgumentList.Add(a);
             try
             {
                 using (var p = Process.Start(psi))
