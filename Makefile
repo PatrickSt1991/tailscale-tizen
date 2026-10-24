@@ -122,10 +122,19 @@ help:
 # a hard-float (-gnueabihf) build is what produced the earlier dlopen "internal
 # error". See .github/workflows/spike-tpk-tizen5.yml.
 CSHARED_OUT ?= cshared/libtsspike.so
-.PHONY: cshared
+# Override with CSHARED_LDFLAGS= (empty) for an unstripped image, e.g. to run
+# `go tool nm -size -sort size` on it in CI.
+CSHARED_LDFLAGS ?= -s -w
+CSHARED_HELLO_OUT ?= cshared/libhello_go.so
+.PHONY: cshared cshared-hello
 cshared:
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 \
-	  go build -buildmode=c-shared -ldflags='-s -w' -o $(CSHARED_OUT) ./cshared
+	  go build -buildmode=c-shared -ldflags='$(CSHARED_LDFLAGS)' -o $(CSHARED_OUT) ./cshared
+
+# Tiny Go c-shared control lib for the spike (see cshared/hello/hello.go).
+cshared-hello:
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 \
+	  go build -buildmode=c-shared -ldflags='-s -w' -o $(CSHARED_HELLO_OUT) ./cshared/hello
 
 tailscaled: Tailscale/lib/tailscaled
 

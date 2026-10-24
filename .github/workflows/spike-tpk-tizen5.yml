@@ -1,10 +1,16 @@
 name: Spike — tizen50 .tpk with in-process c-shared
 
-# Step B of the spike: bundle the CGO c-shared Tailscale engine into the
-# tizen50 .tpk (in bin/, so DllImport resolves it) and let the app P/Invoke it.
-# Install on the retail 5.0 TV and read :8081 — if the Go runtime comes alive
-# and tsnet logs its auth URL, dlopen + in-process tailscale works under the
-# retail sandbox (the whole point).
+# Step C of the spike. Step B's softfp/glibc-2.24 build got past the loader's
+# ELF/ABI check on the RU7020 (the old "internal error" is gone) but dlopen now
+# fails with "failed to map segment from shared object" — an mmap() inside the
+# dynamic loader was refused, and glibc 2.24 drops the errno. This build adds:
+#   - SpikeProbe.cs: reproduces the loader's mmaps by hand with errno, dumps
+#     mount options / Smack labels / limits / address-space holes to :8081
+#   - two tiny control libs (C, Go) built with the same toolchain
+#   - the .so files in lib/ (Tizen's native-lib dir) as well as shared/res
+#   - a symbol-size report of the engine image (why is .noptrbss 34MB?)
+# Install on the retail 5.0 TV, read :8081, and the PROBE/dlopen lines say
+# whether it is policy (noexec/Smack), memory, or the Go image layout.
 
 on:
   workflow_dispatch:
@@ -54,7 +60,7 @@ jobs:
           done
           echo "=== sysroot key files ==="; ls -la lib usr/lib 2>/dev/null | grep -E 'libc\.so|libpthread|libdl|crt1\.o|crti\.o' | head
 
-      - name: Build c-shared engine (armv7, softfp, Tizen 5.0 sysroot)
+      - name: Build engine + control libs (armv7, softfp, Tizen 5.0 sysroot)
         run: |
           SYSROOT="$GITHUB_WORKSPACE/sysroot"
           FLAGS="-march=armv7-a -mtune=cortex-a8 -mfpu=neon -mfloat-abi=softfp"
@@ -62,22 +68,44 @@ jobs:
           export CC="arm-linux-gnueabi-gcc --sysroot=$SYSROOT $FLAGS"
           export CGO_CFLAGS="$FLAGS -O2"
           export CGO_LDFLAGS="--sysroot=$SYSROOT -fuse-ld=bfd -L$SYSROOT/lib -L$SYSROOT/usr/lib -Wl,-rpath-link,$SYSROOT/lib -Wl,-rpath-link,$SYSROOT/usr/lib"
+
+          echo "=== engine, unstripped (for the symbol-size report only) ==="
+          make cshared CSHARED_LDFLAGS= CSHARED_OUT=cshared/libtsspike-dbg.so
+          echo "--- top 15 symbols by size ---"
+          go tool nm -size -sort size cshared/libtsspike-dbg.so | head -15 || true
+          echo "--- top 10 .bss/.noptrbss symbols (why is the RW segment 36MB?) ---"
+          go tool nm -size -sort size cshared/libtsspike-dbg.so | awk '$3=="B"||$3=="b"' | head -10 || true
+          rm -f cshared/libtsspike-dbg.so cshared/libtsspike-dbg.h
+
+          echo "=== engine, stripped (ships) ==="
           make cshared
+          echo "=== Go control lib ==="
+          make cshared-hello
+          echo "=== C control lib ==="
+          $CC -shared -fPIC -O2 -o cshared/libhello_c.so cshared/cprobe/hello_c.c
+          ls -la cshared/*.so
 
-      - name: Verify .so ABI (soft-float + glibc <= 2.24)
+      - name: Verify .so ABI (soft-float + glibc <= 2.24) for all three
         run: |
-          echo "--- header ---"; arm-linux-gnueabi-readelf -h cshared/libtsspike.so | grep -iE 'Class|OS/ABI|Machine'
-          echo "--- float ABI (Tag_ABI_VFP_args must be ABSENT for softfp) ---"
-          if arm-linux-gnueabi-readelf -A cshared/libtsspike.so | grep -qi 'VFP_args'; then echo "FAIL: hard-float object present"; exit 1; else echo "OK: soft-float"; fi
-          echo "--- max GLIBC symbol version ---"
-          MAX=$(arm-linux-gnueabi-objdump -T cshared/libtsspike.so | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1); echo "max=${MAX:-none}"
-          if [ -n "$MAX" ] && [ "$(printf '%s\n' GLIBC_2.24 "$MAX" | sort -V | tail -1)" != "GLIBC_2.24" ]; then echo "FAIL: needs $MAX > 2.24"; exit 1; fi
-          echo "OK: glibc ceiling within 2.24"
+          for so in cshared/libtsspike.so cshared/libhello_go.so cshared/libhello_c.so; do
+            echo "=== $so ==="
+            arm-linux-gnueabi-readelf -h "$so" | grep -iE 'Class|OS/ABI|Machine|Flags'
+            if arm-linux-gnueabi-readelf -A "$so" | grep -qi 'VFP_args'; then echo "FAIL: hard-float object: $so"; exit 1; else echo "OK: soft-float"; fi
+            MAX=$(arm-linux-gnueabi-objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1); echo "max glibc=${MAX:-none}"
+            if [ -n "$MAX" ] && [ "$(printf '%s\n' GLIBC_2.24 "$MAX" | sort -V | tail -1)" != "GLIBC_2.24" ]; then echo "FAIL: needs $MAX > 2.24"; exit 1; fi
+            echo "--- program headers ---"; arm-linux-gnueabi-readelf -lW "$so" | grep -E 'LOAD|TLS|GNU_STACK'
+          done
 
-      # Into shared/res BEFORE dotnet build (classic SDK globs shared/res at
-      # eval time). Program.cs dlopen()s it by absolute path from there.
-      - name: Stage libtsspike.so into shared/res
-        run: cp cshared/libtsspike.so Tailscale5/shared/res/libtsspike.so
+      # Into shared/res AND lib/ BEFORE dotnet build (classic SDK globs at eval
+      # time). Program.cs tries lib/ first, then shared/res, then a data copy.
+      - name: Stage .so files into shared/res and lib/
+        run: |
+          mkdir -p Tailscale5/lib
+          for so in libtsspike.so libhello_go.so libhello_c.so; do
+            cp "cshared/$so" "Tailscale5/shared/res/$so"
+            cp "cshared/$so" "Tailscale5/lib/$so"
+          done
+          ls -la Tailscale5/shared/res Tailscale5/lib
 
       - name: Setup .NET Core 3.1 SDK
         uses: actions/setup-dotnet@v4
@@ -87,18 +115,22 @@ jobs:
       - name: Build tizen50 .tpk
         run: dotnet build Tailscale5/Tailscale5.csproj -c Debug
 
-      - name: Locate + verify .tpk contains shared/res/libtsspike.so
+      - name: Locate + verify .tpk contents
         run: |
           f=$(find Tailscale5/bin -name '*.tpk' | head -n 1)
           if [ -z "$f" ]; then echo "No .tpk produced" >&2; exit 1; fi
           cp "$f" Tailscale-tizen5-spike.tpk
           echo "Built: $f"
-          if unzip -l "$f" | grep -q 'shared/res/libtsspike.so'; then
-            echo "OK: libtsspike.so is packaged in shared/res/"
+          echo "--- native libs in the package ---"
+          unzip -l "$f" | grep -E '\.so$' || true
+          for so in libtsspike.so libhello_go.so libhello_c.so; do
+            unzip -l "$f" | grep -q "shared/res/$so" || { echo "FAIL: $so NOT in shared/res/" >&2; exit 1; }
+          done
+          echo "OK: all three .so files in shared/res/"
+          if unzip -l "$f" | grep -q 'lib/libtsspike.so'; then
+            echo "OK: lib/ packaged too (the app will try that location first)"
           else
-            echo "FAIL: libtsspike.so NOT in shared/res/" >&2
-            unzip -l "$f" | grep -iE 'libtsspike|\.so' || true
-            exit 1
+            echo "NOTE: SDK did not package lib/ — the app will report 'nothing here' for lib/ and fall through"
           fi
 
       - uses: actions/upload-artifact@v4

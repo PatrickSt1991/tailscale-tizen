@@ -16,10 +16,13 @@
 # Tizen 5.0 port: tailscaled staged into shared/res at build time (see csproj)
 /Tailscale5/shared/res/tailscaled
 
-# c-shared spike build outputs
-/cshared/libtsspike.so
-/cshared/libtsspike.h
+# c-shared spike build outputs (engine + control libs), staged into
+# Tailscale5/shared/res and Tailscale5/lib by CI before the dotnet build
+/cshared/*.so
+/cshared/*.h
 /Tailscale5/shared/res/libtsspike.so
+/Tailscale5/shared/res/libhello_*.so
+/Tailscale5/lib/
 
 # Signed packages
 *.signed.tpk

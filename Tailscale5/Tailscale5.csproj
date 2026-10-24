@@ -37,7 +37,18 @@
   <!-- SPIKE: the CGO c-shared Tailscale engine ships in shared/res (staged
        there by CI before build, like tailscaled). Program.cs dlopen()s it by
        absolute path from DirectoryInfo.SharedResource — the Tizen .NET launcher
-       doesn't search bin/ for native libs, so DllImport-by-name doesn't work. -->
+       doesn't search bin/ for native libs, so DllImport-by-name doesn't work.
+
+       Step C also stages the same .so files into lib/ — the location Tizen
+       reserves for an app's native libraries (installer labels it for exec,
+       launcher puts it on the native search path). Same Content pattern as the
+       8.0 project's lib/tailscaled; CI reports whether the SDK packaged it. -->
+  <ItemGroup>
+    <Content Include="lib\*.so">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
+  </ItemGroup>
 
   <!-- tailscaled ships inside shared/res, which the classic Tizen.NET.Sdk
        reliably packages (a lib/ Content item pointing outside the project dir

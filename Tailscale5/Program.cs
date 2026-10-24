@@ -435,34 +435,16 @@ namespace Tailscale
         // .NET launcher doesn't search bin/ for native libs, so a bare
         // DllImport("libtsspike.so") fails with DllNotFound. dlopen also gives
         // us dlerror() for real diagnostics (noexec / Smack / missing dep).
-        [DllImport("libdl.so.2", EntryPoint = "dlopen", CharSet = CharSet.Ansi)]
-        private static extern IntPtr dlopen(string filename, int flags);
+        // dlopen itself (with errno + raw dlerror bytes) lives in SpikeProbe.
         [DllImport("libdl.so.2", EntryPoint = "dlsym", CharSet = CharSet.Ansi)]
         private static extern IntPtr dlsym(IntPtr handle, string symbol);
         [DllImport("libdl.so.2", EntryPoint = "dlerror")]
         private static extern IntPtr dlerror();
 
-        private const int RTLD_NOW = 0x002;
-        private const int RTLD_GLOBAL = 0x100;
-
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate IntPtr TsSpikeDelegate(
             [MarshalAs(UnmanagedType.LPStr)] string dir,
             [MarshalAs(UnmanagedType.LPStr)] string logPath);
-
-        private IntPtr TryDlopen(string path)
-        {
-            if (!File.Exists(path)) { Diag("dlopen: not present at " + path); return IntPtr.Zero; }
-            dlerror(); // clear any prior error
-            IntPtr h = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-            if (h == IntPtr.Zero)
-            {
-                IntPtr e = dlerror();
-                Diag("dlopen FAILED " + path + " -> " + (Marshal.PtrToStringAnsi(e) ?? "(no dlerror)"));
-            }
-            else Diag("dlopen OK " + path);
-            return h;
-        }
 
         private async Task BackendMain()
         {
@@ -475,25 +457,57 @@ namespace Tailscale
                 string logPath = Path.Combine(dataDir, "spike.log");
                 try { File.WriteAllText(logPath, ""); } catch { }
 
-                Diag("SPIKE: loading libtsspike.so via dlopen …");
-                RunOnUi(() => _loggedOutStatus.Text = "Spike: loading in-process engine… (see :8081)");
+                Diag("SPIKE: step C — loader mmap diagnostics + control libs");
+                RunOnUi(() => _loggedOutStatus.Text = "Spike: probing in-process loader… (see :8081)");
 
-                // Try the RO image first; fall back to a chmod'd copy in the
-                // writable data dir (in case shared/res isn't exec-mmap'able).
-                string roPath = Path.Combine(sharedRes, "libtsspike.so");
-                IntPtr h = TryDlopen(roPath);
-                if (h == IntPtr.Zero)
+                // Candidate locations for the native libs, in order of
+                // preference: lib/ (Tizen's own native-lib dir, if the SDK
+                // packaged it), shared/res (what shipped so far), and a
+                // chmod'd copy in the writable data dir.
+                string appRoot = Path.GetDirectoryName(Path.GetDirectoryName(sharedRes.TrimEnd('/')));
+                string libDir = Path.Combine(appRoot, "lib");
+                Diag("SPIKE: sharedRes=" + sharedRes + " lib=" + libDir + " data=" + dataDir);
+                Diag("SPIKE: LD_LIBRARY_PATH=" + (Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? "(unset)"));
+                Diag("SPIKE: NATIVE_DLL_SEARCH_DIRECTORIES=" + (AppContext.GetData("NATIVE_DLL_SEARCH_DIRECTORIES") ?? "(unset)"));
+                foreach (var name in new[] { "libhello_c.so", "libhello_go.so", "libtsspike.so" })
                 {
                     try
                     {
-                        string dst = Path.Combine(dataDir, "libtsspike.so");
-                        File.Copy(roPath, dst, true);
+                        string src = Path.Combine(sharedRes, name);
+                        if (!File.Exists(src)) { Diag("SPIKE: " + name + " not in shared/res"); continue; }
+                        string dst = Path.Combine(dataDir, name);
+                        File.Copy(src, dst, true);
                         chmod(dst, 0x1ED); // 0755
-                        Diag("SPIKE: copied .so to data dir, retrying dlopen");
-                        h = TryDlopen(dst);
                     }
-                    catch (Exception ex) { Diag("SPIKE: data-dir copy fallback: " + ex.Message); }
+                    catch (Exception ex) { Diag("SPIKE: copy " + name + " to data: " + ex.Message); }
                 }
+
+                SpikeProbe.DumpEnvironment(Diag,
+                    Path.Combine(libDir, "libtsspike.so"),
+                    Path.Combine(sharedRes, "libtsspike.so"),
+                    Path.Combine(dataDir, "libtsspike.so"));
+                SpikeProbe.AnonProbe(Diag);
+
+                IntPtr h = IntPtr.Zero;
+                bool goHelloDone = false;
+                foreach (var loc in new[] { new[] { "lib", libDir }, new[] { "shared/res", sharedRes }, new[] { "data", dataDir } })
+                {
+                    Diag("SPIKE ---- location " + loc[0] + " (" + loc[1] + ")");
+                    string big = Path.Combine(loc[1], "libtsspike.so");
+                    if (!File.Exists(big)) { Diag("SPIKE: nothing here"); continue; }
+                    SpikeProbe.MapProbe(Diag, big);
+                    // Controls: tiny C (no runtime), then tiny Go (own runtime).
+                    IntPtr hc = SpikeProbe.Dlopen(Diag, Path.Combine(loc[1], "libhello_c.so"));
+                    if (hc != IntPtr.Zero) SpikeProbe.CallHelloC(Diag, hc, closeAfter: true);
+                    if (!goHelloDone)
+                    {
+                        IntPtr hg = SpikeProbe.Dlopen(Diag, Path.Combine(loc[1], "libhello_go.so"));
+                        if (hg != IntPtr.Zero) { SpikeProbe.CallHelloGo(Diag, hg); goHelloDone = true; }
+                    }
+                    if (h == IntPtr.Zero) h = SpikeProbe.Dlopen(Diag, big);
+                }
+                // Bare name: is lib/ (or anything) on the loader's search path?
+                SpikeProbe.Dlopen(Diag, "libhello_c.so");
 
                 if (h == IntPtr.Zero)
                 {
