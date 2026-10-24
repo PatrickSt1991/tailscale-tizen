@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -282,6 +284,70 @@ namespace Tailscale
             }
             catch (Exception ex) { log("hello_c invoke FAILED: " + ex.Message); }
             if (closeAfter) dlclose(h);
+        }
+
+        // ---- execve probe (step D) ------------------------------------------
+        // Step C proved file-backed PROT_EXEC mmap of an app-owned file is
+        // denied (dlopen dead) but Seccomp=0. execve is a different kernel path
+        // (bprm/Smack-exec, not the userspace mmap hook), so a STATIC binary
+        // (no interpreter, no runtime dlopen) may still run as a subprocess.
+        // Process.Start does fork+execve; on Linux .NET maps the failing errno
+        // into Win32Exception.NativeErrorCode — 1=EPERM, 8=ENOEXEC (format),
+        // 13=EACCES (Smack-exec denied or no x bit). A clean exit = execve works.
+        public static void ExecProbe(Action<string> log, string label, string exePath, string[] args)
+        {
+            if (!File.Exists(exePath)) { log("EXEC " + label + ": missing " + exePath); return; }
+            long size = 0; try { size = new FileInfo(exePath).Length; } catch { }
+            log("EXEC " + label + ": " + exePath + " size=" + size + " " + Xattr(exePath));
+            var psi = new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            try
+            {
+                using (var p = Process.Start(psi))
+                {
+                    if (p == null) { log("EXEC " + label + ": Process.Start returned null"); return; }
+                    string outp = p.StandardOutput.ReadToEnd();
+                    string errp = p.StandardError.ReadToEnd();
+                    bool exited = p.WaitForExit(8000);
+                    if (!exited)
+                    {
+                        try { p.Kill(); } catch { }
+                        log("EXEC " + label + ": started, still running after 8s (killed) -> execve WORKS");
+                        return;
+                    }
+                    log("EXEC " + label + ": exit=" + p.ExitCode + " -> execve WORKS");
+                    string first = FirstLines((outp + errp).Trim(), 2);
+                    if (first.Length > 0) log("EXEC " + label + " output: " + first);
+                }
+            }
+            catch (Win32Exception wex)
+            {
+                log("EXEC " + label + ": FAILED errno=" + wex.NativeErrorCode + " " + Collapse(wex.Message));
+            }
+            catch (Exception ex)
+            {
+                log("EXEC " + label + ": FAILED " + ex.GetType().Name + " " + Collapse(ex.Message));
+            }
+        }
+
+        static string FirstLines(string s, int n)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var parts = s.Replace("\r", "").Split('\n');
+            var sb = new StringBuilder();
+            for (int i = 0; i < parts.Length && i < n; i++)
+            {
+                if (parts[i].Trim().Length == 0) continue;
+                if (sb.Length > 0) sb.Append(" | ");
+                sb.Append(parts[i].Trim());
+            }
+            return sb.ToString();
         }
 
         public static void CallHelloGo(Action<string> log, IntPtr h)

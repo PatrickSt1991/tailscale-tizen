@@ -1,6 +1,6 @@
 name: Spike — tizen50 .tpk with in-process c-shared
 
-# Step C of the spike. Step B's softfp/glibc-2.24 build got past the loader's
+# Step D of the spike (execve). Step C of the spike. Step B's softfp/glibc-2.24 build got past the loader's
 # ELF/ABI check on the RU7020 (the old "internal error" is gone) but dlopen now
 # fails with "failed to map segment from shared object" — an mmap() inside the
 # dynamic loader was refused, and glibc 2.24 drops the errno. This build adds:
@@ -96,14 +96,38 @@ jobs:
             echo "--- program headers ---"; arm-linux-gnueabi-readelf -lW "$so" | grep -E 'LOAD|TLS|GNU_STACK'
           done
 
+      # Step D: static (CGO_ENABLED=0) Go binaries for the execve probe. Fully
+      # static, no dynamic interpreter, so no sysroot/cross-gcc needed — the
+      # kernel maps them in execve, bypassing the userspace ld.so mmap wall.
+      - name: Build static Go binaries (execve probe subjects)
+        run: |
+          export CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7
+          make static-hello
+          make static-tailscaled
+          ls -la cshared/hello-static cshared/tailscaled-static
+          echo "--- hello-static (must have NO INTERP = static) ---"
+          arm-linux-gnueabi-readelf -hlW cshared/hello-static | grep -iE 'Machine|Flags|INTERP|LOAD'
+          if arm-linux-gnueabi-readelf -lW cshared/hello-static | grep -q INTERP; then echo "FAIL: hello-static is dynamic (has INTERP)"; exit 1; fi
+          echo "--- tailscaled-static ---"
+          arm-linux-gnueabi-readelf -hW cshared/tailscaled-static | grep -iE 'Machine|Flags'
+          if arm-linux-gnueabi-readelf -lW cshared/tailscaled-static | grep -q INTERP; then echo "FAIL: tailscaled-static is dynamic (has INTERP)"; exit 1; fi
+          if arm-linux-gnueabi-readelf -A cshared/hello-static | grep -qi 'VFP_args'; then echo "FAIL: hard-float"; exit 1; fi
+          echo "OK: both static, soft-float, armv7"
+
       # Into shared/res AND lib/ BEFORE dotnet build (classic SDK globs at eval
-      # time). Program.cs tries lib/ first, then shared/res, then a data copy.
-      - name: Stage .so files into shared/res and lib/
+      # time). Program.cs runs the execve probe from lib/, shared/res, and a
+      # chmod'd data-dir copy.
+      - name: Stage .so files and static binaries into shared/res and lib/
         run: |
           mkdir -p Tailscale5/lib
           for so in libtsspike.so libhello_go.so libhello_c.so; do
             cp "cshared/$so" "Tailscale5/shared/res/$so"
             cp "cshared/$so" "Tailscale5/lib/$so"
+          done
+          for b in hello-static tailscaled-static; do
+            cp "cshared/$b" "Tailscale5/shared/res/$b"
+            cp "cshared/$b" "Tailscale5/lib/$b"
+            chmod 0755 "Tailscale5/shared/res/$b" "Tailscale5/lib/$b"
           done
           ls -la Tailscale5/shared/res Tailscale5/lib
 
@@ -127,10 +151,15 @@ jobs:
             unzip -l "$f" | grep -q "shared/res/$so" || { echo "FAIL: $so NOT in shared/res/" >&2; exit 1; }
           done
           echo "OK: all three .so files in shared/res/"
-          if unzip -l "$f" | grep -q 'lib/libtsspike.so'; then
-            echo "OK: lib/ packaged too (the app will try that location first)"
+          echo "--- static binaries in the package ---"
+          for b in hello-static tailscaled-static; do
+            unzip -l "$f" | grep -E "(shared/res|lib)/$b" || { echo "FAIL: $b NOT packaged" >&2; exit 1; }
+          done
+          echo "OK: static binaries packaged (shared/res and/or lib)"
+          if unzip -l "$f" | grep -q 'lib/tailscaled-static'; then
+            echo "OK: lib/ packaged (execve probe will try lib/ too)"
           else
-            echo "NOTE: SDK did not package lib/ — the app will report 'nothing here' for lib/ and fall through"
+            echo "NOTE: SDK did not package lib/ — probe falls back to shared/res + data copy"
           fi
 
       - uses: actions/upload-artifact@v4

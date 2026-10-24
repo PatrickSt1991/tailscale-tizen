@@ -426,25 +426,11 @@ namespace Tailscale
 
         // ---- Backend ----------------------------------------------------------
 
-        // SPIKE build: instead of spawning tailscaled (execve → EPERM on retail
-        // 5.0), load the CGO c-shared library IN-PROCESS so tailscale runs via
-        // dlopen (not execve) and sidesteps the seccomp block. Success = the Go
-        // runtime comes alive and tsnet logs its auth URL, visible at :8081.
-        //
-        // We dlopen by ABSOLUTE PATH rather than DllImport-by-name: the Tizen
-        // .NET launcher doesn't search bin/ for native libs, so a bare
-        // DllImport("libtsspike.so") fails with DllNotFound. dlopen also gives
-        // us dlerror() for real diagnostics (noexec / Smack / missing dep).
-        // dlopen itself (with errno + raw dlerror bytes) lives in SpikeProbe.
-        [DllImport("libdl.so.2", EntryPoint = "dlsym", CharSet = CharSet.Ansi)]
-        private static extern IntPtr dlsym(IntPtr handle, string symbol);
-        [DllImport("libdl.so.2", EntryPoint = "dlerror")]
-        private static extern IntPtr dlerror();
-
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        private delegate IntPtr TsSpikeDelegate(
-            [MarshalAs(UnmanagedType.LPStr)] string dir,
-            [MarshalAs(UnmanagedType.LPStr)] string logPath);
+        // SPIKE build: step C proved dlopen of an app-bundled .so is blocked on
+        // retail 5.0 (file-backed PROT_EXEC mmap -> EPERM). Step D (BackendMain)
+        // now tests the other native path, execve of a STATIC binary, which goes
+        // through a different kernel hook. The in-process dlopen machinery is
+        // retired; see SpikeProbe.ExecProbe.
 
         private async Task BackendMain()
         {
@@ -457,105 +443,43 @@ namespace Tailscale
                 string logPath = Path.Combine(dataDir, "spike.log");
                 try { File.WriteAllText(logPath, ""); } catch { }
 
-                Diag("SPIKE: step C — loader mmap diagnostics + control libs");
-                RunOnUi(() => _loggedOutStatus.Text = "Spike: probing in-process loader… (see :8081)");
+                Diag("SPIKE: step D — execve probe (static Go binary + static tailscaled)");
+                RunOnUi(() => _loggedOutStatus.Text = "Spike: probing execve… (see :8081)");
 
-                // Candidate locations for the native libs, in order of
-                // preference: lib/ (Tizen's own native-lib dir, if the SDK
-                // packaged it), shared/res (what shipped so far), and a
-                // chmod'd copy in the writable data dir.
                 string appRoot = Path.GetDirectoryName(Path.GetDirectoryName(sharedRes.TrimEnd('/')));
                 string libDir = Path.Combine(appRoot, "lib");
                 Diag("SPIKE: sharedRes=" + sharedRes + " lib=" + libDir + " data=" + dataDir);
-                Diag("SPIKE: LD_LIBRARY_PATH=" + (Environment.GetEnvironmentVariable("LD_LIBRARY_PATH") ?? "(unset)"));
-                Diag("SPIKE: NATIVE_DLL_SEARCH_DIRECTORIES=" + (AppContext.GetData("NATIVE_DLL_SEARCH_DIRECTORIES") ?? "(unset)"));
-                foreach (var name in new[] { "libhello_c.so", "libhello_go.so", "libtsspike.so" })
+
+                // Static binaries bypass the userspace ld.so mmap wall from step
+                // C: no interpreter, the kernel maps them in execve. Try each
+                // packaged dir in place (different Smack labels: lib ::RO,
+                // shared/res User::Home) and a chmod'd copy in the data dir.
+                foreach (var name in new[] { "hello-static", "tailscaled-static" })
                 {
-                    try
+                    string[] args = name.StartsWith("tailscaled") ? new[] { "--version" } : new string[0];
+                    bool dataDone = false;
+                    foreach (var loc in new[] { new[] { "lib", libDir }, new[] { "shared/res", sharedRes } })
                     {
-                        string src = Path.Combine(sharedRes, name);
-                        if (!File.Exists(src)) { Diag("SPIKE: " + name + " not in shared/res"); continue; }
-                        string dst = Path.Combine(dataDir, name);
-                        File.Copy(src, dst, true);
-                        chmod(dst, 0x1ED); // 0755
+                        string src = Path.Combine(loc[1], name);
+                        if (!File.Exists(src)) { Diag("SPIKE: " + name + " not in " + loc[0]); continue; }
+                        SpikeProbe.ExecProbe(Diag, name + " @ " + loc[0] + " (in place)", src, args);
+                        if (!dataDone)
+                        {
+                            try
+                            {
+                                string dst = Path.Combine(dataDir, name);
+                                File.Copy(src, dst, true);
+                                chmod(dst, 0x1ED); // 0755
+                                SpikeProbe.ExecProbe(Diag, name + " @ data (copied+chmod 0755)", dst, args);
+                                dataDone = true;
+                            }
+                            catch (Exception ex) { Diag("SPIKE: copy/exec " + name + ": " + ex.Message); }
+                        }
                     }
-                    catch (Exception ex) { Diag("SPIKE: copy " + name + " to data: " + ex.Message); }
                 }
+                Diag("SPIKE: execve probe done — read the errno on any FAILED line (1=EPERM 8=ENOEXEC 13=EACCES)");
+                RunOnUi(() => _loggedOutStatus.Text = "Spike: execve probe done (see :8081)");
 
-                SpikeProbe.DumpEnvironment(Diag,
-                    Path.Combine(libDir, "libtsspike.so"),
-                    Path.Combine(sharedRes, "libtsspike.so"),
-                    Path.Combine(dataDir, "libtsspike.so"));
-                SpikeProbe.AnonProbe(Diag);
-
-                IntPtr h = IntPtr.Zero;
-                bool goHelloDone = false;
-                foreach (var loc in new[] { new[] { "lib", libDir }, new[] { "shared/res", sharedRes }, new[] { "data", dataDir } })
-                {
-                    Diag("SPIKE ---- location " + loc[0] + " (" + loc[1] + ")");
-                    string big = Path.Combine(loc[1], "libtsspike.so");
-                    if (!File.Exists(big)) { Diag("SPIKE: nothing here"); continue; }
-                    SpikeProbe.MapProbe(Diag, big);
-                    // Controls: tiny C (no runtime), then tiny Go (own runtime).
-                    IntPtr hc = SpikeProbe.Dlopen(Diag, Path.Combine(loc[1], "libhello_c.so"));
-                    if (hc != IntPtr.Zero) SpikeProbe.CallHelloC(Diag, hc, closeAfter: true);
-                    if (!goHelloDone)
-                    {
-                        IntPtr hg = SpikeProbe.Dlopen(Diag, Path.Combine(loc[1], "libhello_go.so"));
-                        if (hg != IntPtr.Zero) { SpikeProbe.CallHelloGo(Diag, hg); goHelloDone = true; }
-                    }
-                    if (h == IntPtr.Zero) h = SpikeProbe.Dlopen(Diag, big);
-                }
-                // Bare name: is lib/ (or anything) on the loader's search path?
-                SpikeProbe.Dlopen(Diag, "libhello_c.so");
-
-                if (h == IntPtr.Zero)
-                {
-                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED: dlopen (see :8081)");
-                    return;
-                }
-
-                IntPtr sym = dlsym(h, "TsSpike");
-                if (sym == IntPtr.Zero)
-                {
-                    Diag("SPIKE: dlsym(TsSpike) failed: " + (Marshal.PtrToStringAnsi(dlerror()) ?? "?"));
-                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED: dlsym (see :8081)");
-                    return;
-                }
-
-                try
-                {
-                    var fn = Marshal.GetDelegateForFunctionPointer<TsSpikeDelegate>(sym);
-                    IntPtr r = fn(tsdir, logPath);
-                    Diag("SPIKE: TsSpike returned: " + (Marshal.PtrToStringAnsi(r) ?? "(null)"));
-                    RunOnUi(() => _loggedOutStatus.Text = "Spike: engine loaded — see :8081");
-                }
-                catch (Exception ex)
-                {
-                    Diag("SPIKE: TsSpike invoke FAILED: " + ex);
-                    RunOnUi(() => _loggedOutStatus.Text = "Spike FAILED (invoke): " + ex.Message);
-                    return;
-                }
-
-                // Tail spike.log (written by the Go side) into the diag so the
-                // auth URL / errors show up at :8081.
-                long pos = 0;
-                while (true)
-                {
-                    await Task.Delay(1500);
-                    try
-                    {
-                        if (!File.Exists(logPath)) continue;
-                        using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        fs.Seek(pos, SeekOrigin.Begin);
-                        using var sr = new StreamReader(fs);
-                        string chunk = sr.ReadToEnd();
-                        pos = fs.Position;
-                        foreach (var line in chunk.Split('\n'))
-                            if (line.Trim().Length > 0) Diag("tsnet> " + line.Trim());
-                    }
-                    catch (Exception ex) { Diag("SPIKE tail: " + ex.Message); }
-                }
             }
             catch (Exception ex)
             {

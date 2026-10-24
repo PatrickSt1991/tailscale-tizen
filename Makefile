@@ -136,6 +136,20 @@ cshared-hello:
 	CGO_ENABLED=1 GOOS=linux GOARCH=arm GOARM=7 \
 	  go build -buildmode=c-shared -ldflags='-s -w' -o $(CSHARED_HELLO_OUT) ./cshared/hello
 
+# Step D — STATIC binaries (CGO_ENABLED=0) for the execve probe. Fully static,
+# no dynamic interpreter, so no userspace ld.so mmap: the kernel maps them in
+# execve. No sysroot/cross-gcc needed (pure Go, no libc).
+STATIC_HELLO_OUT ?= cshared/hello-static
+STATIC_TSD_OUT ?= cshared/tailscaled-static
+.PHONY: static-hello static-tailscaled
+static-hello:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+	  go build -ldflags='-s -w' -o $(STATIC_HELLO_OUT) ./cshared/execprobe
+
+static-tailscaled:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+	  go build -trimpath -ldflags='-s -w' -o $(STATIC_TSD_OUT) tailscale.com/cmd/tailscaled
+
 tailscaled: Tailscale/lib/tailscaled
 
 # Cross-compile tailscaled at the version pinned in go.mod. `go build` from

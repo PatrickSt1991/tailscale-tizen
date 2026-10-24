@@ -20,8 +20,12 @@
 # Tailscale5/shared/res and Tailscale5/lib by CI before the dotnet build
 /cshared/*.so
 /cshared/*.h
+/cshared/hello-static
+/cshared/tailscaled-static
 /Tailscale5/shared/res/libtsspike.so
 /Tailscale5/shared/res/libhello_*.so
+/Tailscale5/shared/res/hello-static
+/Tailscale5/shared/res/tailscaled-static
 /Tailscale5/lib/
 
 # Signed packages

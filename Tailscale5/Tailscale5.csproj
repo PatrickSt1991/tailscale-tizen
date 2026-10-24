@@ -48,6 +48,15 @@
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
       <TizenIncludeInPackage>true</TizenIncludeInPackage>
     </Content>
+    <!-- Step D: static ELF binaries for the execve probe. -->
+    <Content Include="lib\hello-static">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
+    <Content Include="lib\tailscaled-static">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+      <TizenIncludeInPackage>true</TizenIncludeInPackage>
+    </Content>
   </ItemGroup>
 
   <!-- tailscaled ships inside shared/res, which the classic Tizen.NET.Sdk
